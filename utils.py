@@ -59,7 +59,6 @@ def visualise_text_sequence(
                 align="center",
                 font=dict(size=10),
                 height=25,
-                width=120,  # Added width parameter to make cells wider
             ),
         ),
         row=1,
