@@ -4,15 +4,10 @@ from typing import cast
 
 import numpy as np
 import torch
-from circuitsvis.tokens import colored_tokens_multi  # type: ignore
 from datasets import Dataset, load_dataset  # type: ignore
 from einops import reduce
 from transformer_lens import HookedTransformer  # type: ignore
-from transformers import (  # type: ignore
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    PreTrainedTokenizer,
-)
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer  # type: ignore
 
 from utils import find_common_subsections, visualise_text_sequence
 
@@ -94,6 +89,7 @@ def tokenwise_kl(probs_P_SV: torch.Tensor, probs_Q_SV: torch.Tensor):
 
 hookpoints = [f"blocks.{i}.hook_resid_pre" for i in range(llm_r1_tuned.cfg.n_layers)]
 
+
 def get_logits_and_resid(
     prompt: str, tokenizer: PreTrainedTokenizer, model: HookedTransformer
 ):
@@ -143,6 +139,9 @@ def get_seq_data(prompt: str) -> list[SeqData]:
         assert (input_math_section == input_r1_section).all()
         input_tokens_S = input_math_section
 
+        math_resid_section_SLD = math_resid_SLD[start_math:end_math]
+        r1_resid_section_SLD = r1_resid_SLD[start_r1:end_r1]
+
         math_seq_probs_SV = math_section_logits_SV.softmax(dim=-1)
         r1_seq_probs_SV = r1_section_logits_SV.softmax(dim=-1)
 
@@ -153,8 +152,6 @@ def get_seq_data(prompt: str) -> list[SeqData]:
             probs_P_SV=math_seq_probs_SV, probs_Q_SV=r1_seq_probs_SV
         )
 
-        math_resid_section_SLD = math_resid_SLD[start_math:end_math]
-        r1_resid_section_SLD = r1_resid_SLD[start_r1:end_r1]
         sq_err_SLD = (math_resid_section_SLD - r1_resid_section_SLD) ** 2
         mse_SL = reduce(sq_err_SLD, "S L D -> S L", "mean")
 
@@ -178,23 +175,11 @@ seq = fmt_conversation(next(dataset_iter)["reannotated_messages"])
 len(seq)
 # %%
 seq
+
 # %%
 
 sections = get_seq_data(seq)
-# %%
 
-
-# mses_SL_cpu = mses_SL.T.to("cpu").float().numpy()
-# tokenwise_kl_S_cpu = tokenwise_kl_S.detach().to("cpu").float().numpy()
-
-
-# %%
-sec = sections[0]
-print(f"kl_div_S.shape: {sec.kl_div_S.shape}")
-print(f"mse_SL.shape: {sec.mse_SL.shape}")
-print(f"input_tokens_S.shape: {sec.input_tokens_S.shape}")
-print(f"math_pred_toks_S.shape: {sec.math_pred_toks_S.shape}")
-print(f"r1_pred_toks_S.shape: {sec.r1_pred_toks_S.shape}")
 # %%
 
 kl_div_S = (
@@ -226,11 +211,6 @@ r1_pred_toks: list[str] = [
 ]
 
 # %%
-# kl_div_S.shape, mse_SL.shape
-# input_seq_toks[0], math_pred_toks[0], r1_pred_toks[0]
-# %%
-
-# %%
 
 visualise_text_sequence(
     kl_div_S=kl_div_S[1:],
@@ -241,18 +221,3 @@ visualise_text_sequence(
 ).show(renderer="browser")
 
 # %%
-
-# demo
-visualise_text_sequence(
-    kl_div_S=np.array([0.1, 0.2]),
-    mse_SL=np.array([[0.1, 100], [0.3, 0.4]]),
-    input_sequence=["a", "b"],
-    math_pred_toks=["a", "b"],
-    r1_pred_toks=["a", "b"],
-)
-
-# %%
-
-llm_r1_tuned_tokenizer.decode(92)
-
-# %%# %%

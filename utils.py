@@ -31,18 +31,22 @@ def visualise_text_sequence(
 
     # Create figure with specified layout
     fig = make_subplots(
-        rows=3,
+        rows=5,
         cols=1,
-        row_heights=[0.2, 0.2, 0.6],  # Adjusted heights for better visibility
+        row_heights=[0.2, 0.2, 0.6, 0.6, 0.6],  # Adjusted heights for better visibility
         specs=[
             [{"type": "table"}],  # For tokens (vertical)
             [{"type": "heatmap"}],  # For KL divergence
+            [{"type": "heatmap"}],  # For MSE
+            [{"type": "heatmap"}],  # For MSE
             [{"type": "heatmap"}],  # For MSE
         ],
         subplot_titles=(
             "Input Tokens",
             "KL Divergence by Token",
             "MSEs by Token and Layer",
+            "MSEs by Token and Layer (normed by layer)",
+            "MSEs by Token and Layer (normed by token)",
         ),
         vertical_spacing=0.03,
     )
@@ -87,14 +91,19 @@ def visualise_text_sequence(
     )
 
     # Transpose MSE matrix for better visualization (layers on y-axis)
-    mse_transposed = mse_SL.T
+    mse_LS = mse_SL.T
+    max_per_layer_L = mse_LS.max(axis=1)
+    mse_normed_by_layer_LS = mse_LS / max_per_layer_L[:, None]
+
+    max_per_token_S = mse_LS.max(axis=0)
+    mse_normed_by_token_LS = mse_LS / max_per_token_S[None, :]
 
     fig.add_trace(
         go.Heatmap(
-            z=mse_transposed,
+            z=mse_LS,
             x=list(range(num_tokens)),  # Tokens on x-axis
             y=list(range(num_layers)),  # Layers on y-axis
-            # coloraxis="coloraxis2",
+            coloraxis="coloraxis2",
             hovertemplate="Token index: %{x}<br>Layer: %{y}<br>MSE: %{z:.4f}<extra></extra>",
             # zmin=0,
             # zmax=10,
@@ -102,6 +111,36 @@ def visualise_text_sequence(
         row=3,
         col=1,
     )
+
+
+    fig.add_trace(
+        go.Heatmap(
+            z=mse_normed_by_layer_LS,
+            x=list(range(num_tokens)),  # Tokens on x-axis
+            y=list(range(num_layers)),  # Layers on y-axis
+            # coloraxis="coloraxis2",
+            hovertemplate="Token index: %{x}<br>Layer: %{y}<br>MSE: %{z:.4f}<extra></extra>",
+            # zmin=0,
+            # zmax=10,
+        ),
+        row=4,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Heatmap(
+            z=mse_normed_by_token_LS,
+            x=list(range(num_tokens)),  # Tokens on x-axis
+            y=list(range(num_layers)),  # Layers on y-axis
+            # coloraxis="viridis",
+            hovertemplate="Token index: %{x}<br>Layer: %{y}<br>MSE: %{z:.4f}<extra></extra>",
+            # zmin=0,
+            # zmax=10,
+        ),
+        row=5,
+        col=1,
+    )
+
 
     # Update layout
     fig.update_layout(
@@ -122,8 +161,16 @@ def visualise_text_sequence(
             ),
             cmax=10
         ),
-        height=max(800, num_layers * 20 + 400),  # Scale height based on layers
-        width=max(1000, num_tokens * 30),  # Scale width based on tokens
+        # coloraxis3=dict(
+        #     colorscale="Viridis",
+        #     colorbar=dict(
+        #         title="MSE",
+        #         y=0.35,  # Position for MSE colorbar
+        #         len=0.5,
+        #     )
+        # ),
+        height=2000,  #max(800, num_layers * 20 + 400),  # Scale height based on layers
+        width=max(1000, num_tokens * 60),  # Scale width based on tokens
         title="Token-wise Analysis with KL Divergence and MSE",
         margin=dict(t=80, b=50, l=80, r=50),
     )
@@ -146,24 +193,25 @@ def visualise_text_sequence(
     )
 
     # For MSE plot
-    fig.update_xaxes(
-        title="Token Index",
-        range=[-0.5, num_tokens - 0.5],
-        row=3,
-        col=1,
-        tickmode="array",
-        tickvals=list(range(num_tokens)),
-        ticktext=[f"{i}" for i in range(num_tokens)],
-    )
-    fig.update_yaxes(
-        title="Layer",
-        range=[-0.5, num_layers - 0.5],
-        row=3,
-        col=1,
-        tickmode="array",
-        tickvals=list(range(num_layers)),
-        ticktext=[f"{i}" for i in range(num_layers)],
-    )
+    for i in [3, 4, 5]:
+        fig.update_xaxes(
+            title="Token Index",
+            range=[-0.5, num_tokens - 0.5],
+            row=i,
+            col=1,
+            tickmode="array",
+            tickvals=list(range(num_tokens)),
+            ticktext=[f"{i}" for i in range(num_tokens)],
+        )
+        fig.update_yaxes(
+            title="Layer",
+            range=[-0.5, num_layers - 0.5],
+            row=i,
+            col=1,
+            tickmode="array",
+            tickvals=list(range(num_layers)),
+            ticktext=[f"{i}" for i in range(num_layers)],
+        )
 
     # Return the figure for display
     return fig
