@@ -1,17 +1,20 @@
 # %%import torch
 from dataclasses import dataclass
-import numpy as np
-import plotly.express as px
 from typing import cast
-from einops import rearrange, reduce
-import torch
-from circuitsvis.tokens import colored_tokens, colored_tokens_multi  # type: ignore
-from datasets import Dataset, load_dataset  # type: ignore
-from transformer_lens import HookedTransformer  # type: ignore
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer  # type: ignore
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
+import numpy as np
+import torch
+from circuitsvis.tokens import colored_tokens_multi  # type: ignore
+from datasets import Dataset, load_dataset  # type: ignore
+from einops import reduce
+from transformer_lens import HookedTransformer  # type: ignore
+from transformers import (  # type: ignore
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedTokenizer,
+)
+
+from utils import visualise_text_sequence
 
 # %%
 DATASET_PATH = "ServiceNow-AI/R1-Distill-SFT"
@@ -81,41 +84,6 @@ llm_r1_tuned, llm_r1_tuned_hf, llm_r1_tuned_tokenizer = make_model(R1_TUNED)
 # %%
 
 
-def examine(seq: str):
-    kl_sections = get_seq_data(seq)
-
-    # index into one of the tokenizations
-    math_ranges = [math_range for ((math_range, _), _) in kl_sections]
-    valid_indices = {i for (start, end) in math_ranges for i in range(start, end)}
-    math_toks: torch.Tensor = llm_math_tokenizer.encode(seq, return_tensors="pt")[0]
-
-    math_tokens = [
-        llm_math_tokenizer.decode(tok) if i in valid_indices else "?"
-        for i, tok in enumerate(math_toks)
-    ]
-    # (KL, would've predicted different, alternative prediction)
-    values = torch.zeros(len(math_tokens), 4)
-    for ((math_start, math_end), _), data in kl_sections:
-        values[math_start:math_end] = data
-    # return colored_tokens(
-    #     tokens=math_tokens,
-    #     values=values.tolist(),
-    #     min_value=0,
-    #     max_value=10,
-    # )
-
-    return colored_tokens_multi(
-        tokens=math_tokens,
-        values=values,
-        labels=["kl", "they differ", "math pred", "r1 pred"],
-        # min_value=0,
-        # max_value=10,
-    )
-
-
-# %%
-
-
 def tokenwise_kl(probs_P_SV: torch.Tensor, probs_Q_SV: torch.Tensor):
     """S = seq, V = vocab"""
     tokens_kl_S = torch.sum(probs_P_SV * torch.log(probs_P_SV / probs_Q_SV), dim=-1)
@@ -124,14 +92,7 @@ def tokenwise_kl(probs_P_SV: torch.Tensor, probs_Q_SV: torch.Tensor):
 
 # %%
 
-
-Range = tuple[int, int]
-
-KlDivSection = tuple[tuple[Range, Range], torch.Tensor, torch.Tensor]
-
 hookpoints = [f"blocks.{i}.hook_resid_pre" for i in range(llm_r1_tuned.cfg.n_layers)]
-# hookpoints = [item for sublist in hookpoints for item in sublist]
-
 
 def get_logits_and_resid(
     prompt: str, tokenizer: PreTrainedTokenizer, model: HookedTransformer
@@ -150,6 +111,7 @@ def get_logits_and_resid(
 
 # %%
 
+
 @dataclass
 class SeqData:
     input_tokens_S: torch.Tensor
@@ -157,6 +119,7 @@ class SeqData:
     r1_pred_toks_S: torch.Tensor
     kl_div_S: torch.Tensor
     mse_SL: torch.Tensor
+
 
 def get_seq_data(prompt: str) -> list[SeqData]:
     math_logits_SV, math_resid_SLD, math_toks_S = get_logits_and_resid(
@@ -186,7 +149,9 @@ def get_seq_data(prompt: str) -> list[SeqData]:
         math_seq_preds_S = math_section_logits_SV.argmax(dim=-1)
         r1_seq_preds_S = r1_section_logits_SV.argmax(dim=-1)
 
-        kl_div_S = tokenwise_kl(probs_P_SV=math_seq_probs_SV, probs_Q_SV=r1_seq_probs_SV)
+        kl_div_S = tokenwise_kl(
+            probs_P_SV=math_seq_probs_SV, probs_Q_SV=r1_seq_probs_SV
+        )
 
         math_resid_section_SLD = math_resid_SLD[start_math:end_math]
         r1_resid_section_SLD = r1_resid_SLD[start_r1:end_r1]
@@ -232,18 +197,39 @@ print(f"math_pred_toks_S.shape: {sec.math_pred_toks_S.shape}")
 print(f"r1_pred_toks_S.shape: {sec.r1_pred_toks_S.shape}")
 # %%
 
-kl_div_S = torch.cat([section.kl_div_S for section in sections]).detach().float().cpu().numpy()
-mse_SL = torch.cat([section.mse_SL for section in sections]).detach().float().cpu().numpy()
-input_seq_toks: list[str] = [llm_math_tokenizer.decode(tok) for tok in torch.cat([section.input_tokens_S for section in sections]).detach().cpu().numpy()]
-math_pred_toks: list[str] = [llm_math_tokenizer.decode(tok) for tok in torch.cat([section.math_pred_toks_S for section in sections]).detach().cpu().numpy()]
-r1_pred_toks: list[str] = [llm_r1_tuned_tokenizer.decode(tok) for tok in torch.cat([section.r1_pred_toks_S for section in sections]).detach().cpu().numpy()]
+kl_div_S = (
+    torch.cat([section.kl_div_S for section in sections]).detach().float().cpu().numpy()
+)
+mse_SL = (
+    torch.cat([section.mse_SL for section in sections]).detach().float().cpu().numpy()
+)
+input_seq_toks: list[str] = [
+    llm_math_tokenizer.decode(tok)
+    for tok in torch.cat([section.input_tokens_S for section in sections])
+    .detach()
+    .cpu()
+    .numpy()
+]
+math_pred_toks: list[str] = [
+    llm_math_tokenizer.decode(tok)
+    for tok in torch.cat([section.math_pred_toks_S for section in sections])
+    .detach()
+    .cpu()
+    .numpy()
+]
+r1_pred_toks: list[str] = [
+    llm_r1_tuned_tokenizer.decode(tok)
+    for tok in torch.cat([section.r1_pred_toks_S for section in sections])
+    .detach()
+    .cpu()
+    .numpy()
+]
 
 # %%
 # kl_div_S.shape, mse_SL.shape
 # input_seq_toks[0], math_pred_toks[0], r1_pred_toks[0]
 # %%
 
-from utils import visualise_text_sequence
 # %%
 
 visualise_text_sequence(
@@ -270,4 +256,3 @@ visualise_text_sequence(
 llm_r1_tuned_tokenizer.decode(92)
 
 # %%# %%
-
