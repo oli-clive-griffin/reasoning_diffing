@@ -12,6 +12,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+
 # %%
 DATASET_PATH = "ServiceNow-AI/R1-Distill-SFT"
 DATASET_NAME = "v1"
@@ -218,120 +219,6 @@ sections = get_seq_data(seq)
 # %%
 
 
-def visualise_text_sequence(
-    input_sequence: list[str],
-    math_pred_toks: list[str],
-    r1_pred_toks: list[str],
-    kl_div_S: np.ndarray,
-    mse_SL: np.ndarray,
-):
-    assert kl_div_S.shape[0] == mse_SL.shape[0]
-    assert kl_div_S.shape[0] == len(input_sequence)
-
-    # Get tokens for hover text in KL divergence plot
-    # Use math tokenizer to decode tokens corresponding to KL values
-    # math_token_texts = [llm_math_tokenizer.decode(int(tok)) for tok in math_tokens]
-    # r1_token_texts = [llm_r1_tuned_tokenizer.decode(int(tok)) for tok in r1_tokens]
-
-    # Calculate number of tokens and layers
-    num_tokens = len(input_sequence)
-
-    # Create a figure with 3 rows (tokens, KL divergence, MSEs)
-    fig = make_subplots(
-        rows=3,
-        cols=1,
-        subplot_titles=("Tokens", "KL Divergence by token", "MSEs by token and layer"),
-        vertical_spacing=0.05,
-        row_heights=[0.1, 0.1, 0.8],
-        specs=[
-            [{"type": "table"}],  # For tokens
-            [{"type": "heatmap"}],  # For KL
-            [{"type": "heatmap"}],  # For MSE
-        ],
-    )
-
-    # Row 1: Create a row for tokens as text
-    cell_values = [input_sequence]
-    cell_colors = []
-
-    # Create color scale based on KL values
-    max_kl = max(kl_div_S)
-    kl_colors = []
-    for kl_val in kl_div_S:
-        if kl_val > max_kl * 0.8:
-            kl_colors.append("rgba(255, 0, 0, 0.8)")  # Red for high KL
-        elif kl_val > max_kl * 0.5:
-            kl_colors.append("rgba(255, 165, 0, 0.6)")  # Orange for medium KL
-        elif kl_val > max_kl * 0.2:
-            kl_colors.append("rgba(255, 255, 0, 0.4)")  # Yellow for low KL
-        else:
-            kl_colors.append("rgba(255, 255, 255, 0)")  # Transparent for negligible KL
-
-    cell_colors.append(kl_colors)
-
-    # Add tokens as a table
-    fig.add_trace(
-        go.Table(
-            header=dict(values=[""], height=0),
-            cells=dict(
-                values=cell_values,
-                fill_color=[kl_colors],
-                align="center",
-                font=dict(size=10),
-                height=25,
-            ),
-        ),
-        row=1,
-        col=1,
-    )
-
-    # Row 2: KL divergence heatmap
-    # Reshape to 2D for heatmap (adding a dimension)
-    kl_2d = kl_div_S.reshape(1, -1)
-
-    # Create hover text with token information
-    assert len(math_pred_toks) == len(r1_pred_toks)
-    hover_text = [
-        [
-            f"math token: '{math_pred_toks[i]}' r1 token: '{r1_pred_toks[i]}' | KL: {kl_2d[0][i]:.4f}"
-            for i in range(len(math_pred_toks))
-        ]
-    ]
-
-    fig.add_trace(
-        go.Heatmap(
-            z=kl_2d, coloraxis="coloraxis2", zmax=10, hoverinfo="text", text=hover_text
-        ),
-        row=2,
-        col=1,
-    )
-
-    # Row 3: MSEs heatmap
-    fig.add_trace(go.Heatmap(z=mse_SL, coloraxis="coloraxis1", zmax=10), row=3, col=1)
-
-    # Update layout
-    fig.update_layout(
-        coloraxis1=dict(
-            colorscale="Viridis", colorbar=dict(title="MSE", y=0.4, len=0.5)
-        ),
-        coloraxis2=dict(colorscale="Reds", colorbar=dict(title="KL", y=0.85, len=0.2)),
-        height=800,
-        width=max(1800, num_tokens * 20),  # Scale width based on number of tokens
-        title="Comparison of MSEs and KL Divergence Across Sequence",
-        margin=dict(t=50, b=20, l=20, r=20),
-    )
-
-    # Ensure the table and heatmaps line up by adjusting xaxis ranges
-    fig.update_xaxes(range=[-0.5, num_tokens - 0.5], row=2, col=1)
-    fig.update_xaxes(range=[-0.5, num_tokens - 0.5], row=3, col=1)
-
-    # Hide axes for cleaner appearance
-    fig.update_xaxes(showticklabels=False, row=2, col=1)
-    fig.update_yaxes(showticklabels=False, row=2, col=1)
-
-    fig.show(renderer="browser")
-
-
 # mses_SL_cpu = mses_SL.T.to("cpu").float().numpy()
 # tokenwise_kl_S_cpu = tokenwise_kl_S.detach().to("cpu").float().numpy()
 
@@ -356,103 +243,31 @@ r1_pred_toks: list[str] = [llm_r1_tuned_tokenizer.decode(tok) for tok in torch.c
 # input_seq_toks[0], math_pred_toks[0], r1_pred_toks[0]
 # %%
 
+from utils import visualise_text_sequence
+# %%
+
 visualise_text_sequence(
-    kl_div_S=kl_div_S,
-    mse_SL=mse_SL,
-    input_sequence=input_seq_toks,
-    math_pred_toks=math_pred_toks,
-    r1_pred_toks=r1_pred_toks,
-)
+    kl_div_S=kl_div_S[1:],
+    mse_SL=mse_SL[1:],
+    input_sequence=input_seq_toks[1:],
+    math_pred_toks=math_pred_toks[1:],
+    r1_pred_toks=r1_pred_toks[1:],
+).show(renderer="browser")
 
 # %%
 
-#demo
+# demo
 visualise_text_sequence(
     kl_div_S=np.array([0.1, 0.2]),
-    mse_SL=np.array([0.1, 0.2]),
+    mse_SL=np.array([[0.1, 100], [0.3, 0.4]]),
     input_sequence=["a", "b"],
     math_pred_toks=["a", "b"],
     r1_pred_toks=["a", "b"],
 )
 
-llm_math_tokenizer.decode(532)
 # %%
 
 llm_r1_tuned_tokenizer.decode(92)
 
-# %%
+# %%# %%
 
-get_r1_token(5109)
-get_math_token(2661)
-
-# %%
-
-
-def find_common_subsections(
-    seq1: list[int], seq2: list[int]
-) -> list[tuple[Range, Range]]:
-    """
-    Find common subsections between two token sequences.
-
-    Returns:
-        List of tuples, where each tuple contains:
-        ((seq1_start, seq1_end), (seq2_start, seq2_end))
-
-        The ranges are inclusive for start and exclusive for end.
-    """
-    # Find all common substrings
-    common_substrings = []
-
-    i = 0
-    while i < len(seq1):
-        j = 0
-        while j < len(seq2):
-            # Skip if not a match
-            if seq1[i] != seq2[j]:
-                j += 1
-                continue
-
-            # Found a match, find length
-            length = 1
-            while (
-                i + length < len(seq1)
-                and j + length < len(seq2)
-                and seq1[i + length] == seq2[j + length]
-            ):
-                length += 1
-
-            common_substrings.append((i, j, length))
-
-            # Move forward
-            j += 1
-        i += 1
-
-    # Sort by length (descending)
-    common_substrings.sort(key=lambda x: -x[2])
-
-    # Filter out overlapping substrings
-    result: list[tuple[Range, Range]] = []
-    used_indices1: set[int] = set()
-    used_indices2: set[int] = set()
-
-    for start1, start2, length in common_substrings:
-        # Create range sets for this substring
-        range1 = set(range(start1, start1 + length))
-        range2 = set(range(start2, start2 + length))
-
-        # Check if there's any overlap with previously selected substrings
-        if not (range1 & used_indices1) and not (range2 & used_indices2):
-            result.append(((start1, start1 + length), (start2, start2 + length)))
-            used_indices1.update(range1)
-            used_indices2.update(range2)
-
-    # Sort by position in seq1
-    return sorted(result, key=lambda x: x[0][0])
-
-
-# example:
-seq1 = [1, 2, 3, 8, 9]
-seq2 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-
-find_common_subsections(seq1, seq2)
-# %%
