@@ -2,12 +2,164 @@ import torch
 import numpy as np
 import plotly.graph_objects as go  # type: ignore
 from plotly.subplots import make_subplots  # type: ignore
-from transformers import PreTrainedTokenizer
-from transformer_lens import HookedTransformer
+from transformer_lens import HookedTransformer  # type: ignore
 from einops import reduce
 from dataclasses import dataclass
 
+def visualise_text_sequence_vertical(
+    input_sequence: list[str],
+    math_pred_toks: list[str],
+    r1_pred_toks: list[str],
+    kl_div_S: np.ndarray,
+    mse_SL: np.ndarray,
+    acts_math_SLD: np.ndarray,
+    acts_r1_SLD: np.ndarray,
+):
+    """
+    Visualize a text sequence with corresponding KL divergence and MSE values in a horizontal layout.
+    Table is removed, using token values as y-axis labels.
+    The visualization is flipped vertically so tokens are in reverse order.
 
+    Args:
+        input_sequence: List of input tokens/text segments
+        math_pred_toks: Token predictions from math model
+        r1_pred_toks: Token predictions from r1 model
+        kl_div_S: KL divergence values per token (shape: [S])
+        mse_SL: MSE values per token and layer (shape: [S, L])
+    """
+    assert kl_div_S.shape[0] == mse_SL.shape[0]
+    assert kl_div_S.shape[0] == len(input_sequence)
+    assert len(math_pred_toks) == len(r1_pred_toks)
+    assert len(math_pred_toks) == len(input_sequence)
+
+    # Calculate number of tokens and layers
+    num_tokens = len(input_sequence)
+    num_layers = mse_SL.shape[1]
+
+    # Create figure with horizontal layout - just two heatmaps
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        column_widths=[0.05, 0.95],  # KL is narrower, MSE is wider
+        specs=[
+            [{"type": "heatmap"}, {"type": "heatmap"}],
+        ],
+        # subplot_titles=(
+        #     "KL Divergence",
+        #     "MSEs by Layer (normed)",
+        # ),
+        horizontal_spacing=0.01,
+    )
+
+    # Create hover text with token information
+    hover_texts = [
+        f"Token: '{input_sequence[i]}' | Math: '{math_pred_toks[i]}' | R1: '{r1_pred_toks[i]}' | KL: {kl_div_S[i]:.4f}"
+        for i in range(num_tokens)
+    ]
+
+    # Column 1: KL divergence heatmap (vertical)
+    # We're using reversed y indices, so we don't need to flip the data
+    fig.add_trace(
+        go.Heatmap(
+            z=kl_div_S.reshape(-1, 1),  # Original data (will be displayed bottom-to-top)
+            x=[0],  # Single column
+            y=list(range(num_tokens-1, -1, -1)),  # Reversed token indices
+            coloraxis="coloraxis1",
+            hoverinfo="text",
+            text=hover_texts[::-1],  # Reverse the hover texts to match reversed y-axis
+            showscale=False,
+            ygap=0,  # Remove gaps between cells
+        ),
+        row=1,
+        col=1,
+    )
+
+    # Column 2: MSE heatmap
+    # Normalize MSE values first
+    # max_per_layer_L = np.max(mse_SL, axis=0)  # Max per layer
+    # mse_normed_by_layer_SL = mse_SL / max_per_layer_L
+    r1_norms_SL = np.linalg.norm(acts_r1_SLD, ord=2, axis=-1)
+    math_norms_SL = np.linalg.norm(acts_math_SLD, ord=2, axis=-1)
+    mean_l2_norm_SL = (r1_norms_SL + math_norms_SL) / 2
+    nmse_SL = np.linalg.norm(acts_r1_SLD - acts_math_SLD, axis=-1) / mean_l2_norm_SL
+    
+    # We'll use reversed y indices, so no need to flip the data
+    fig.add_trace(
+        go.Heatmap(
+            # z=mse_normed_by_layer_SL,  # Original data (will be displayed bottom-to-top)
+            z=nmse_SL,  # Original data (will be displayed bottom-to-top)
+            y=list(range(num_tokens))[::-1],  # Reversed token indices
+            x=list(range(num_layers)),  # Layers on x-axis
+            hovertemplate="Token index: %{y}<br>Layer: %{x}<br>MSE: %{z:.4f}<extra></extra>",
+            showscale=False,
+            ygap=0,  # Remove gaps between cells
+        ),
+        row=1,
+        col=2,
+    )
+
+    # Create custom y-tick labels that combine token with predictions
+    y_tick_labels = []
+    for tok, math_pred, r1_pred in zip(input_sequence, math_pred_toks, r1_pred_toks):
+        # Format: "token → math_pred | r1_pred"
+        if math_pred == r1_pred:
+            label = f"{tok} → {math_pred}"
+        else:
+            label = f"{tok} → {math_pred} | {r1_pred}"
+        y_tick_labels.append(label)
+    
+    # Flip the y-tick labels to match the flipped visualization
+
+    # Update axes labels
+    # For KL divergence plot
+    fig.update_xaxes(
+        showticklabels=False,  # Hide x-axis labels for KL (single column)
+        row=1,
+        col=1,
+    )
+    fig.update_yaxes(
+        title=None,
+        row=1,
+        col=1,
+        tickmode="array",
+        tickvals=list(range(num_tokens-1,-1,-1)),  # Reversed token indices
+        ticktext=y_tick_labels,
+        tickfont=dict(size=10),
+        showgrid=False,
+    )
+
+    # For MSE plot
+    fig.update_xaxes(
+        title="Layer",
+        range=[-0.5, num_layers - 0.5],
+        row=1,
+        col=2,
+        tickmode="array",
+        tickvals=list(range(num_layers)),
+        ticktext=[f"{i}" for i in range(num_layers)],
+    )
+    fig.update_yaxes(
+        title=None,
+        row=1,
+        col=2,
+        showticklabels=False,  # Hide duplicate y-axis labels
+        showgrid=False,
+    )
+
+    # Update layout
+    fig.update_layout(
+        coloraxis1=dict(
+            colorscale="Reds",
+            showscale=False,  # Explicitly hide the colorbar
+        ),
+        height=num_tokens * 25 + 50,  # Scale height based on number of tokens
+        width=num_layers * 15 + 150,  # Scale width based on layers
+        title="Token-wise Analysis with KL Divergence and MSE",
+        margin=dict(t=80, b=20, l=20, r=20),  # Increased left margin for token labels
+    )
+
+    # Return the figure for display
+    return fig
 
 def visualise_text_sequence(
     input_sequence: list[str],
@@ -39,7 +191,7 @@ def visualise_text_sequence(
     fig = make_subplots(
         rows=3,
         cols=1,
-        row_heights=[0.2, 0.2, 0.6],  # Adjusted heights for better visibility
+        row_heights=[0.2, 0.05, 0.75],  # Adjusted heights for better visibility
         specs=[
             [{"type": "table"}],  # For tokens (vertical)
             [{"type": "heatmap"}],  # For KL divergence
@@ -57,7 +209,6 @@ def visualise_text_sequence(
     # Transpose the input sequence to make it display vertically
     token_table = [[token, math_pred_tok, r1_pred_tok] for token, math_pred_tok, r1_pred_tok in zip(input_sequence, math_pred_toks, r1_pred_toks)]
 
-    # Add tokens as a table with rotated header
     fig.add_trace(
         go.Table(
             cells=dict(
@@ -122,7 +273,7 @@ def visualise_text_sequence(
                 len=0.2,
             ),
         ),
-        height=1000,  #max(800, num_layers * 20 + 400),  # Scale height based on layers
+        height=800,  #max(800, num_layers * 20 + 400),  # Scale height based on layers
         width=num_tokens * 60,  # Scale width based on tokens
         title="Token-wise Analysis with KL Divergence and MSE",
         margin=dict(t=80, b=50, l=80, r=50),
@@ -307,9 +458,9 @@ DATASET = [
 
 
 def get_logits_and_resid(
-    prompt: str, model: HookedTransformer
+    prompt: str, model: HookedTransformer, every_n_layers: int,
 ):
-    hookpoints = [f"blocks.{i}.hook_resid_pre" for i in range(model.cfg.n_layers) if i % 4 == 0]
+    hookpoints = [f"blocks.{i}.hook_resid_pre" for i in range(model.cfg.n_layers) if i % every_n_layers == 0]
     toks: torch.Tensor = model.tokenizer.encode(prompt, return_tensors="pt")  # type: ignore
     assert toks.shape[0] == 1
     seq_logits, cache = model.run_with_cache(
@@ -337,11 +488,14 @@ class SeqData:
     r1_pred_toks_S: torch.Tensor
     kl_div_S: torch.Tensor
     mse_SL: torch.Tensor
+    acts_math_SLD: torch.Tensor
+    acts_r1_SLD: torch.Tensor
 
 
-def get_seq_data(prompt: str, llm_math: HookedTransformer, llm_r1_tuned: HookedTransformer,) -> list[SeqData]:
-    math_logits_SV, math_resid_SLD, math_toks_S = get_logits_and_resid(prompt, llm_math)
-    r1_logits_SV, r1_resid_SLD, r1_toks_S = get_logits_and_resid(prompt, llm_r1_tuned)
+
+def get_seq_data(prompt: str, llm_math: HookedTransformer, llm_r1_tuned: HookedTransformer, every_n_layers: int = 4) -> list[SeqData]:
+    math_logits_SV, math_resid_SLD, math_toks_S = get_logits_and_resid(prompt, llm_math, every_n_layers)
+    r1_logits_SV, r1_resid_SLD, r1_toks_S = get_logits_and_resid(prompt, llm_r1_tuned, every_n_layers)
 
     common_subsections = find_common_subsections(
         math_toks_S.tolist(), r1_toks_S.tolist()
@@ -380,6 +534,8 @@ def get_seq_data(prompt: str, llm_math: HookedTransformer, llm_r1_tuned: HookedT
                 r1_pred_toks_S=r1_seq_preds_S,
                 kl_div_S=kl_div_S,
                 mse_SL=mse_SL,
+                acts_math_SLD=math_resid_section_SLD,
+                acts_r1_SLD=r1_resid_section_SLD,
             )
         )
 

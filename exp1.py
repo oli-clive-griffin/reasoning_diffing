@@ -1,14 +1,21 @@
-# import torch
-# import transformer_lens
-# # import transformers
-
 # %%
-import torch
-from einops import reduce
-from transformer_lens import HookedTransformer  # type: ignore
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer  # type: ignore
+from typing import cast
 
-from utils import find_common_subsections, get_logits_and_resid, get_seq_data, visualise_text_sequence, DATASET
+import torch
+from circuitsvis.tokens import colored_tokens_multi  # type: ignore
+from transformer_lens import HookedTransformer  # type: ignore
+from transformers import (  # type: ignore
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedTokenizer,
+)
+
+from utils import (
+    DATASET,
+    SeqData,
+    get_seq_data,
+    visualise_text_sequence_vertical,
+)
 
 CACHE_DIR = ".cache"
 BASE = "Qwen/Qwen2.5-7B"
@@ -19,7 +26,7 @@ R1_TUNED = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
 # %%
 def make_model(
     name: str,
-) -> tuple[HookedTransformer, AutoModelForCausalLM, PreTrainedTokenizer]:
+) -> tuple[HookedTransformer, AutoModelForCausalLM]:
     hf_model = AutoModelForCausalLM.from_pretrained(name, cache_dir=CACHE_DIR)
     hf_tokenizer = AutoTokenizer.from_pretrained(name, cache_dir=CACHE_DIR)
     tl_model = HookedTransformer.from_pretrained_no_processing(
@@ -29,12 +36,13 @@ def make_model(
         dtype=torch.bfloat16,
         tokenizer=hf_tokenizer,
     )
-    return tl_model, hf_model, hf_tokenizer  # type: ignore
+    return tl_model, hf_model  # type: ignore
+
 
 # %%
 
-llm_math, llm_math_hf, llm_math_tokenizer = make_model(BASE_MATH)
-llm_r1_tuned, llm_r1_tuned_hf, llm_r1_tuned_tokenizer = make_model(R1_TUNED)
+llm_math, llm_math_hf = make_model(BASE_MATH)
+llm_r1_tuned, llm_r1_tuned_hf = make_model(R1_TUNED)
 
 # %%
 
@@ -54,34 +62,32 @@ for block in llm_r1_tuned.blocks:
 # %%
 
 
-
-
 def fmt_math(q: str) -> str:
     return f"A conversation between a user and an assistant. The user asks a question and the assistant answers.\n\nUser: {q}\n\nAssistant:"
 
 
 def fmt_r1(q: str) -> str:
-    return llm_r1_tuned.tokenizer.apply_chat_template(
-        [{ "role": "user", "content": q }],
-        add_generation_prompt=True,
-        tokenize=False
+    return cast(
+        str,
+        llm_r1_tuned.tokenizer.apply_chat_template(  # type: ignore
+            [{"role": "user", "content": q}], add_generation_prompt=True, tokenize=False
+        ),
     )
 
-# %%
-
-# def run_question(llm: HookedTransformer, question: str, toks: int = 400) -> str:
-#     return llm.generate(question, max_new_tokens=toks)
-
 
 # %%
-q, c = DATASET[6].values()
+q, c = DATASET[5].values()
 # %%
 print(f"Question: {q}")
 print(f"Correct answer: {c}")
 # %%
-math_answer = llm_math.generate(fmt_math(q), max_new_tokens=300, do_sample=False)
+math_answer: str = cast(
+    str, llm_math.generate(fmt_math(q), max_new_tokens=300, do_sample=False)
+)  # type: ignore
 # %%
-r1_answer = llm_r1_tuned.generate(fmt_r1(q), max_new_tokens=2000, do_sample=False)
+r1_answer: str = cast(
+    str, llm_r1_tuned.generate(fmt_r1(q), max_new_tokens=2000, do_sample=False)
+)  # type: ignore
 
 # %%
 
@@ -96,113 +102,138 @@ print(c)
 
 torch.cuda.empty_cache()
 # %%
-r1_answer[:400]
-# %%
-prompt = r1_answer[:400]
-data = get_seq_data(prompt, llm_math, llm_r1_tuned)
-# %%
+len(r1_answer)
 
-math_logits_SV, math_resid_SLD, math_toks_S = get_logits_and_resid(prompt, llm_math)
-r1_logits_SV, r1_resid_SLD, r1_toks_S = get_logits_and_resid(prompt, llm_r1_tuned)
-# %%
-# math_logits_SV = math_logits_SV[x:]
-# math_resid_SLD = math_resid_SLD[x:]
-# math_toks_S = math_toks_S[x:]
-# r1_logits_SV = r1_logits_SV[x:]
-# r1_resid_SLD = r1_resid_SLD[x:]
-# r1_toks_S = r1_toks_S[x:]
-common_subsections = find_common_subsections(
-    math_toks_S.tolist(), r1_toks_S.tolist()
-)
+
 # %%
 
-sections: list[SeqData] = []
-for (start_math, end_math), (start_r1, end_r1) in common_subsections:
-    math_section_logits_SV = math_logits_SV[start_math:end_math]
-    r1_section_logits_SV = r1_logits_SV[start_r1:end_r1]
 
-    input_math_section = math_toks_S[start_math:end_math]
-    input_r1_section = r1_toks_S[start_r1:end_r1]
-    assert (input_math_section == input_r1_section).all()
-    input_tokens_S = input_math_section
+def process_sections(
+    sections: list[SeqData],
+    llm_math_tokenizer: PreTrainedTokenizer,
+    llm_r1_tuned_tokenizer: PreTrainedTokenizer,
+):
+    kl_div_S = (
+        torch.cat([section.kl_div_S for section in sections])
+        .detach()
+        .float()
+        .cpu()
+        .numpy()
+    )
+    mse_SL = (
+        torch.cat([section.mse_SL for section in sections])
+        .detach()
+        .float()
+        .cpu()
+        .numpy()
+    )
+    acts_math_SLD = (
+        torch.cat([section.acts_math_SLD for section in sections])
+        .detach()
+        .float()
+        .cpu()
+        .numpy()
+    )
+    acts_r1_SLD = (
+        torch.cat([section.acts_r1_SLD for section in sections])
+        .detach()
+        .float()
+        .cpu()
+        .numpy()
+    )
+    input_seq_toks: list[str] = [
+        llm_math_tokenizer.decode(tok)
+        for tok in torch.cat([section.input_tokens_S for section in sections])
+        .detach()
+        .cpu()
+        .numpy()
+    ]
+    math_pred_toks: list[str] = [
+        llm_math_tokenizer.decode(tok)
+        for tok in torch.cat([section.math_pred_toks_S for section in sections])
+        .detach()
+        .cpu()
+        .numpy()
+    ]
+    r1_pred_toks: list[str] = [
+        llm_r1_tuned_tokenizer.decode(tok)
+        for tok in torch.cat([section.r1_pred_toks_S for section in sections])
+        .detach()
+        .cpu()
+        .numpy()
+    ]
 
-    math_resid_section_SLD = math_resid_SLD[start_math:end_math]
-    r1_resid_section_SLD = r1_resid_SLD[start_r1:end_r1]
-
-    math_seq_probs_SV = math_section_logits_SV.softmax(dim=-1)
-    r1_seq_probs_SV = r1_section_logits_SV.softmax(dim=-1)
-
-    math_seq_preds_S = math_section_logits_SV.argmax(dim=-1)
-    r1_seq_preds_S = r1_section_logits_SV.argmax(dim=-1)
-
-    kl_div_S = tokenwise_kl(
-        probs_P_SV=math_seq_probs_SV, probs_Q_SV=r1_seq_probs_SV
+    return (
+        kl_div_S,
+        mse_SL,
+        acts_math_SLD,
+        acts_r1_SLD,
+        input_seq_toks,
+        math_pred_toks,
+        r1_pred_toks,
     )
 
-    sq_err_SLD = (math_resid_section_SLD - r1_resid_section_SLD) ** 2
-    mse_SL = reduce(sq_err_SLD, "S L D -> S L", "mean")
 
-    sections.append(
-        SeqData(
-            input_tokens_S=input_tokens_S,
-            math_pred_toks_S=math_seq_preds_S,
-            r1_pred_toks_S=r1_seq_preds_S,
-            kl_div_S=kl_div_S,
-            mse_SL=mse_SL,
-        )
+# %%
+
+sections = get_seq_data(r1_answer[:400], llm_math, llm_r1_tuned, every_n_layers=1)
+
+(
+    kl_div_S,
+    mse_SL,
+    acts_math_SLD,
+    acts_r1_SLD,
+    input_seq_toks,
+    math_pred_toks,
+    r1_pred_toks,
+) = process_sections(sections, llm_math.tokenizer, llm_r1_tuned.tokenizer)  # type: ignore
+
+# %%
+pref_len = 24
+
+seq_vis = visualise_text_sequence_vertical(
+    kl_div_S=kl_div_S[pref_len:],
+    mse_SL=mse_SL[pref_len:],
+    acts_math_SLD=acts_math_SLD[pref_len:],
+    acts_r1_SLD=acts_r1_SLD[pref_len:],
+    input_sequence=input_seq_toks[pref_len:],
+    math_pred_toks=math_pred_toks[pref_len:],
+    r1_pred_toks=r1_pred_toks[pref_len:],
+)
+# %%
+
+hookpoints = [
+    f"blocks.{i}.hook_resid_pre" for i in range(llm_r1_tuned.cfg.n_layers) if i % 2 == 0
+]
+
+tokens_cropped = input_seq_toks[pref_len:]
+mses_cropped_SL = torch.tensor(mse_SL[pref_len:])
+
+max_by_layer_L = torch.max(mses_cropped_SL, dim=0).values
+values_normed = mses_cropped_SL / max_by_layer_L[None]
+
+toks_html = str(
+    colored_tokens_multi(
+        tokens=tokens_cropped,
+        values=values_normed,
+        labels=hookpoints,
     )
-
-
-
-
-sections = get_seq_data(r1_answer[:400], llm_math, llm_r1_tuned)
-
-
-# %%
-
-kl_div_S = (
-    torch.cat([section.kl_div_S for section in sections]).detach().float().cpu().numpy()
 )
-mse_SL = (
-    torch.cat([section.mse_SL for section in sections]).detach().float().cpu().numpy()
-)
-input_seq_toks: list[str] = [
-    llm_math_tokenizer.decode(tok)
-    for tok in torch.cat([section.input_tokens_S for section in sections])
-    .detach()
-    .cpu()
-    .numpy()
-]
-math_pred_toks: list[str] = [
-    llm_math_tokenizer.decode(tok)
-    for tok in torch.cat([section.math_pred_toks_S for section in sections])
-    .detach()
-    .cpu()
-    .numpy()
-]
-r1_pred_toks: list[str] = [
-    llm_r1_tuned_tokenizer.decode(tok)
-    for tok in torch.cat([section.r1_pred_toks_S for section in sections])
-    .detach()
-    .cpu()
-    .numpy()
-]
-
-# %%
-kl_div_S.shape
 # %%
 
-visualise_text_sequence(
-    kl_div_S=kl_div_S[18:],
-    mse_SL=mse_SL[18:],
-    input_sequence=input_seq_toks[18:],
-    math_pred_toks=math_pred_toks[18:],
-    r1_pred_toks=r1_pred_toks[18:],
-)
-#%% 
+# seq on left in vertically scrolling div, toks on right, no scoll
+website = f"""
+<div style="display: flex; height: 1000px;">
+    <div style="flex: 1; overflow-y: auto;">
+        {seq_vis.to_html()}
+    </div>
+    <div style="flex: 1; overflow-y: auto;">
+        {toks_html}
+    </div>
+</div>
+"""
+# render in the machine's browser
 
-# %%
-
-import plotly.express as px
-px.imshow(mse_SL)
+from IPython.display import HTML  # noqa: E402
+HTML(website)
 # %%
