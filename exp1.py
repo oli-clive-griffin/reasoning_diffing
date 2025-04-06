@@ -5,9 +5,9 @@ import torch
 from circuitsvis.tokens import colored_tokens_multi  # type: ignore
 from transformer_lens import HookedTransformer  # type: ignore
 from transformers import (  # type: ignore
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    PreTrainedTokenizer,
+    AutoModelForCausalLM,  # type: ignore
+    AutoTokenizer,  # type: ignore
+    PreTrainedTokenizer,  # type: ignore
 )
 
 from utils import (
@@ -76,13 +76,13 @@ def fmt_r1(q: str) -> str:
 
 
 # %%
-q, c = DATASET[5].values()
+q, c = DATASET[6].values()
 # %%
 print(f"Question: {q}")
 print(f"Correct answer: {c}")
 # %%
 math_answer: str = cast(
-    str, llm_math.generate(fmt_math(q), max_new_tokens=300, do_sample=False)
+    str, llm_math.generate(fmt_math(q), max_new_tokens=600, do_sample=False)
 )  # type: ignore
 # %%
 r1_answer: str = cast(
@@ -113,56 +113,13 @@ def process_sections(
     llm_math_tokenizer: PreTrainedTokenizer,
     llm_r1_tuned_tokenizer: PreTrainedTokenizer,
 ):
-    kl_div_S = (
-        torch.cat([section.kl_div_S for section in sections])
-        .detach()
-        .float()
-        .cpu()
-        .numpy()
-    )
-    mse_SL = (
-        torch.cat([section.mse_SL for section in sections])
-        .detach()
-        .float()
-        .cpu()
-        .numpy()
-    )
-    acts_math_SLD = (
-        torch.cat([section.acts_math_SLD for section in sections])
-        .detach()
-        .float()
-        .cpu()
-        .numpy()
-    )
-    acts_r1_SLD = (
-        torch.cat([section.acts_r1_SLD for section in sections])
-        .detach()
-        .float()
-        .cpu()
-        .numpy()
-    )
-    input_seq_toks: list[str] = [
-        llm_math_tokenizer.decode(tok)
-        for tok in torch.cat([section.input_tokens_S for section in sections])
-        .detach()
-        .cpu()
-        .numpy()
-    ]
-    math_pred_toks: list[str] = [
-        llm_math_tokenizer.decode(tok)
-        for tok in torch.cat([section.math_pred_toks_S for section in sections])
-        .detach()
-        .cpu()
-        .numpy()
-    ]
-    r1_pred_toks: list[str] = [
-        llm_r1_tuned_tokenizer.decode(tok)
-        for tok in torch.cat([section.r1_pred_toks_S for section in sections])
-        .detach()
-        .cpu()
-        .numpy()
-    ]
-
+    kl_div_S = ( torch.cat([section.kl_div_S for section in sections]) .detach() .float() .cpu() .numpy())
+    mse_SL = ( torch.cat([section.mse_SL for section in sections]) .detach() .float() .cpu() .numpy())
+    acts_math_SLD = ( torch.cat([section.acts_math_SLD for section in sections]) .detach() .float() .cpu() .numpy())
+    acts_r1_SLD = ( torch.cat([section.acts_r1_SLD for section in sections]) .detach() .float() .cpu() .numpy())
+    input_seq_toks: list[str] = [ llm_math_tokenizer.decode(tok) for tok in torch.cat([section.input_tokens_S for section in sections]) .detach() .cpu() .numpy() ]
+    math_pred_toks: list[str] = [ llm_math_tokenizer.decode(tok) for tok in torch.cat([section.math_pred_toks_S for section in sections]) .detach() .cpu() .numpy() ]
+    r1_pred_toks: list[str] = [ llm_r1_tuned_tokenizer.decode(tok) for tok in torch.cat([section.r1_pred_toks_S for section in sections]) .detach() .cpu() .numpy() ]
     return (
         kl_div_S,
         mse_SL,
@@ -176,7 +133,42 @@ def process_sections(
 
 # %%
 
-sections = get_seq_data(r1_answer[:400], llm_math, llm_r1_tuned, every_n_layers=1)
+
+# seq_logits_SV, resid_SLD, toks_S = get_logits_and_resid(r1_answer[:600], llm_r1_tuned, 4)
+
+# prompt = r1_answer
+# model = llm_r1_tuned
+# every_n_layers = 4
+
+
+# hookpoints = [f"blocks.{i}.hook_resid_pre" for i in range(model.cfg.n_layers) if i % every_n_layers == 0]
+# toks: torch.Tensor = model.tokenizer.encode(prompt, return_tensors="pt")  # type: ignore
+# assert toks.shape[0] == 1
+# # %%
+# len(toks[0])
+# # %%
+# print(model.tokenizer.decode(toks[0, 1000:]))
+# # %%
+# seq_logits, cache = model.run_with_cache(
+#     toks[:500],
+#     names_filter=lambda name: name in hookpoints,
+#     pos_slice=slice(1000, None),
+# )
+# # %%
+# seq_logits.shape
+# # %%
+# cache['blocks.0.hook_resid_pre'].shape
+# # %%
+# toks_S = toks[0]
+# seq_logits_SV = seq_logits[0]
+# cache_ = cache.remove_batch_dim()
+# resid_SLD = torch.stack([cache_.cache_dict[hp] for hp in hookpoints ]).transpose(0, 1)
+
+# %%
+
+answer = r1_answer[:600]
+
+sections = get_seq_data(answer, llm_math, llm_r1_tuned, every_n_layers=4)
 
 (
     kl_div_S,
@@ -189,7 +181,7 @@ sections = get_seq_data(r1_answer[:400], llm_math, llm_r1_tuned, every_n_layers=
 ) = process_sections(sections, llm_math.tokenizer, llm_r1_tuned.tokenizer)  # type: ignore
 
 # %%
-pref_len = 24
+pref_len = 19
 
 seq_vis = visualise_text_sequence_vertical(
     kl_div_S=kl_div_S[pref_len:],
@@ -200,10 +192,34 @@ seq_vis = visualise_text_sequence_vertical(
     math_pred_toks=math_pred_toks[pref_len:],
     r1_pred_toks=r1_pred_toks[pref_len:],
 )
+seq_vis
+# %%
+idcs = [len(kl_div_S[pref_len:]) - 1 - neg_offset for neg_offset in (127, 48, 20)]
+
+[input_seq_toks[pref_len:][i] for i in idcs]
+# %%
+space_acts_SD = acts_r1_SLD[pref_len:][idcs, 4]
+# %%
+
+sdf = "The expression \\(1 + 2\\) represents adding 1 to 2.\n\nThe expression \\("
+l0_SD = llm_math.embed(llm_math.tokenizer.encode(sdf, return_tensors='pt')[0])
+end_emb_1D = llm_math.embed(llm_math.tokenizer.encode(r"\)", return_tensors='pt')[0])
+# %%
+# cts_toks
+for space_act_D in torch.tensor(space_acts_SD, device='cuda').unbind(0):
+    inp = torch.cat([l0_SD, space_act_D.unsqueeze(0), end_emb_1D], dim=0).unsqueeze(0)
+    # print(inp)
+    logits = llm_math.generate(inp, return_type="tokens")
+    # print(logits)
+    print(llm_math.tokenizer.decode(logits[0]))
+
+    # input_toks = cts_toks + [
+# [llm_math.tokenizer.decode(tok) for tok in cts_toks]
+
 # %%
 
 hookpoints = [
-    f"blocks.{i}.hook_resid_pre" for i in range(llm_r1_tuned.cfg.n_layers) if i % 2 == 0
+    f"blocks.{i}.hook_resid_pre" for i in range(llm_r1_tuned.cfg.n_layers) if i % 4 == 0
 ]
 
 tokens_cropped = input_seq_toks[pref_len:]
@@ -235,5 +251,7 @@ website = f"""
 # render in the machine's browser
 
 from IPython.display import HTML  # noqa: E402
+
 HTML(website)
 # %%
+
